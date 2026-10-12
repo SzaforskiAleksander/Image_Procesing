@@ -190,6 +190,136 @@ def doEnlarge(pixels, width, height, param):
     # return the enlarged pixels and the new dimensions
     return result, new_width, new_height
 
+def doMin(pixels, width, height, param):
+    window_size = int(param)
+    if window_size % 2 == 0 or window_size < 3:
+        raise ValueError("Window size must be an odd integer >= 3")
+        
+    result = []
+    is_rgb = isinstance(pixels[0], tuple)
+    offset = window_size // 2
+    
+    for y in range(height):
+        for x in range(width):
+            window = []
+            
+            # extract the local window, clamping coordinates to the image boundaries
+            for wy in range(y - offset, y + offset + 1):
+                cy = max(0, min(height - 1, wy))
+                for wx in range(x - offset, x + offset + 1):
+                    cx = max(0, min(width - 1, wx))
+                    window.append(pixels[cy * width + cx])
+            
+            if is_rgb:
+                # calculate minimum for each channel independently
+                r_min = min(p[0] for p in window)
+                g_min = min(p[1] for p in window)
+                b_min = min(p[2] for p in window)
+                result.append((r_min, g_min, b_min))
+            else:
+                result.append(min(window))
+                
+    return result
+
+def doMax(pixels, width, height, param):
+    window_size = int(param)
+    if window_size % 2 == 0 or window_size < 3:
+        raise ValueError("Window size must be an odd integer >= 3")
+        
+    result = []
+    is_rgb = isinstance(pixels[0], tuple)
+    offset = window_size // 2
+    
+    for y in range(height):
+        for x in range(width):
+            window = []
+            
+            # extract the local window, clamping coordinates to the image boundaries
+            for wy in range(y - offset, y + offset + 1):
+                cy = max(0, min(height - 1, wy))
+                for wx in range(x - offset, x + offset + 1):
+                    cx = max(0, min(width - 1, wx))
+                    window.append(pixels[cy * width + cx])
+            
+            if is_rgb:
+                # calculate maximum for each channel independently
+                r_max = max(p[0] for p in window)
+                g_max = max(p[1] for p in window)
+                b_max = max(p[2] for p in window)
+                result.append((r_max, g_max, b_max))
+            else:
+                result.append(max(window))
+                
+    return result
+
+def doAdaptive(pixels, width, height, param):
+    s_max = int(param)
+    if s_max % 2 == 0 or s_max < 3:
+        raise ValueError("Maximum window size (Smax) must be an odd integer >= 3")
+        
+    result = []
+    is_rgb = isinstance(pixels[0], tuple)
+    
+    def adaptive_process(x, y, channel_idx=None):
+        window_size = 3
+        
+        while window_size <= s_max:
+            offset = window_size // 2
+            window = []
+            
+            # extract the local window for the current channel, clamping coordinates
+            for wy in range(y - offset, y + offset + 1):
+                cy = max(0, min(height - 1, wy))
+                for wx in range(x - offset, x + offset + 1):
+                    cx = max(0, min(width - 1, wx))
+                    val = pixels[cy * width + cx]
+                    
+                    if channel_idx is not None:
+                        window.append(val[channel_idx])
+                    else:
+                        window.append(val)
+            
+            z_min = min(window)
+            z_max = max(window)
+            sorted_window = sorted(window)
+            z_med = sorted_window[len(sorted_window) // 2]
+            
+            pixel_val = pixels[y * width + x]
+            z_xy = pixel_val[channel_idx] if channel_idx is not None else pixel_val
+            
+            # Stage A
+            A1 = z_med - z_min
+            A2 = z_med - z_max
+            
+            if A1 > 0 and A2 < 0:
+                # Stage B
+                B1 = z_xy - z_min
+                B2 = z_xy - z_max
+                if B1 > 0 and B2 < 0:
+                    return z_xy
+                else:
+                    return z_med
+            else:
+                # increase window size
+                window_size += 2
+                
+        # if maximum window size is reached then return z_xy
+        pixel_val = pixels[y * width + x]
+        return pixel_val[channel_idx] if channel_idx is not None else pixel_val
+
+    for y in range(height):
+        for x in range(width):
+            if is_rgb:
+                new_pixel = (
+                    adaptive_process(x, y, 0), # Red
+                    adaptive_process(x, y, 1), # Green
+                    adaptive_process(x, y, 2)  # Blue
+                )
+                result.append(new_pixel)
+            else:
+                result.append(adaptive_process(x, y, None))
+                
+    return result
 
 def printHelp():
     # display the available commands and their usage
@@ -204,7 +334,9 @@ Usage:
     python myWonderfulImProcApp.py --vflip input.bmp output.bmp
     python myWonderfulImProcApp.py --shrink VALUE input.bmp output.bmp
     python myWonderfulImProcApp.py --enlarge VALUE input.bmp output.bmp
-    
+    python myWonderfulImProcApp.py --min WINDOW_SIZE input.bmp output.bmp
+    python myWonderfulImProcApp.py --max WINDOW_SIZE input.bmp output.bmp
+    python myWonderfulImProcApp.py --adaptive Smax input.bmp output.bmp
     
 Commands:
     --brightness VALUE
@@ -233,6 +365,15 @@ Commands:
     --enlarge VALUE
         Enlarge the image by an integer factor (e.g., 2 doubles the dimensions).
 
+    --min WINDOW_SIZE
+        Apply a minimum filter with a square window of size WINDOW_SIZE (odd integer >= 3).
+
+    --max WINDOW_SIZE
+        Apply a maximum filter with a square window of size WINDOW_SIZE (odd integer >= 3).
+
+    --adaptive SMAX
+        Apply an adaptive median filter with a maximum window size of Smax (odd integer >= 3).
+
     --help
         Display this help message.
 """)
@@ -258,7 +399,7 @@ def main():
     command = sys.argv[1]
 
     # brightness and contrast require an additional parameter
-    if command in ("--brightness", "--contrast", "--shrink", "--enlarge"):
+    if command in ("--brightness", "--contrast", "--shrink", "--enlarge", "--min", "--max", "--adaptive"):
 
         # check that the correct number of arguments was provided
         if len(sys.argv) != 5:
@@ -334,6 +475,14 @@ def main():
         elif command == "--enlarge":
             pixels, width, height = doEnlarge(pixels, width, height, param)
 
+        elif command == "--min":
+            pixels = doMin(pixels, width, height, param)
+
+        elif command == "--max":
+            pixels = doMax(pixels, width, height, param)
+
+        elif command == "--adaptive":
+            pixels = doAdaptive(pixels, width, height, param)
 
         # create a new image with the original dimensions and mode
         result = Image.new(mode, (width, height))
