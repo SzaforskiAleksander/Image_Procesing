@@ -67,12 +67,18 @@ def doVflip(pixels, width, height):
             result.append(pixel)
     return result
 
+
 def doDflip(pixels, width, height):
     result = []
-    # By iterating over x first, we transpose the image
-    for x in range(width):
-        for y in range(height):
-            old_index = (y * width) + x
+    for y in range(height):
+        # Map to the corresponding bottom row
+        bottom_y = (height - 1) - y
+        for x in range(width):
+            # Map to the corresponding rightmost pixel
+            right_x = (width - 1) - x
+
+            # Calculate the 1D index for the target pixel
+            old_index = (bottom_y * width) + right_x
             result.append(pixels[old_index])
     return result
 
