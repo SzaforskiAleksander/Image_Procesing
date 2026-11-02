@@ -86,32 +86,132 @@ def doShrink(pixels, width, height, param):
     factor = int(param)
     if factor <= 0:
         raise ValueError("Shrink factor must be greater than 0!")
+        
     result = []
     new_width = width // factor
     new_height = height // factor
+    is_rgb = isinstance(pixels[0], tuple)
     
-    # Nearest neighbor interpolation: we skip pixels based on the factor
+    # Interpolation par Moyenne de bloc (Block Averaging)
+    # On calcule la moyenne de tous les pixels dans le bloc factor x factor
     for y in range(new_height):
         for x in range(new_width):
-            old_index = (y * factor * width) + (x * factor)
-            result.append(pixels[old_index])
+            
+            if is_rgb:
+                sum_r, sum_g, sum_b = 0, 0, 0
+                count = 0
+                for dy in range(factor):
+                    for dx in range(factor):
+                        old_y = (y * factor) + dy
+                        old_x = (x * factor) + dx
+                        pixel = pixels[old_y * width + old_x]
+                        sum_r += pixel[0]
+                        sum_g += pixel[1]
+                        sum_b += pixel[2]
+                        count += 1
+                result.append((int(sum_r/count), int(sum_g/count), int(sum_b/count)))
+            else:
+                sum_v = 0
+                count = 0
+                for dy in range(factor):
+                    for dx in range(factor):
+                        old_y = (y * factor) + dy
+                        old_x = (x * factor) + dx
+                        sum_v += pixels[old_y * width + old_x]
+                        count += 1
+                result.append(int(sum_v/count))
+                
+    return result, new_width, new_height
+
+def doShrink(pixels, width, height, param):
+    factor = int(param)
+    if factor <= 0:
+        raise ValueError("Shrink factor must be greater than 0!")
+        
+    result = []
+    new_width = width // factor
+    new_height = height // factor
+    is_rgb = isinstance(pixels[0], tuple)
+    
+    # Block Averaging Interpolation
+    # Calculate the average of all pixels within the factor x factor block
+    for y in range(new_height):
+        for x in range(new_width):
+            
+            if is_rgb:
+                sum_r, sum_g, sum_b = 0, 0, 0
+                count = 0
+                for dy in range(factor):
+                    for dx in range(factor):
+                        old_y = (y * factor) + dy
+                        old_x = (x * factor) + dx
+                        pixel = pixels[old_y * width + old_x]
+                        sum_r += pixel[0]
+                        sum_g += pixel[1]
+                        sum_b += pixel[2]
+                        count += 1
+                result.append((int(sum_r/count), int(sum_g/count), int(sum_b/count)))
+            else:
+                sum_v = 0
+                count = 0
+                for dy in range(factor):
+                    for dx in range(factor):
+                        old_y = (y * factor) + dy
+                        old_x = (x * factor) + dx
+                        sum_v += pixels[old_y * width + old_x]
+                        count += 1
+                result.append(int(sum_v/count))
+                
     return result, new_width, new_height
 
 def doEnlarge(pixels, width, height, param):
     factor = int(param)
     if factor <= 0:
         raise ValueError("Enlarge factor must be greater than 0!")
+        
     result = []
     new_width = width * factor
     new_height = height * factor
+    is_rgb = isinstance(pixels[0], tuple)
     
-    # Nearest neighbor interpolation: we duplicate pixels to fill the new space
+    # Bilinear Interpolation
     for y in range(new_height):
-        old_y = y // factor
         for x in range(new_width):
-            old_x = x // factor
-            old_index = (old_y * width) + old_x
-            result.append(pixels[old_index])
+            # Calculate the corresponding floating-point coordinates in the original image
+            old_x = x / factor
+            old_y = y / factor
+            
+            # Get the coordinates of the 4 nearest neighboring pixels
+            x1 = int(old_x)
+            y1 = int(old_y)
+            x2 = min(x1 + 1, width - 1)
+            y2 = min(y1 + 1, height - 1)
+            
+            # Weights for the interpolation
+            dx = old_x - x1
+            dy = old_y - y1
+            
+            # The 4 neighboring pixels
+            p11 = pixels[y1 * width + x1] # Top Left
+            p21 = pixels[y1 * width + x2] # Top Right
+            p12 = pixels[y2 * width + x1] # Bottom Left
+            p22 = pixels[y2 * width + x2] # Bottom Right
+            
+            if is_rgb:
+                new_pixel = []
+                # Apply the bilinear formula for each color channel
+                for c in range(3):
+                    top = p11[c] * (1 - dx) + p21[c] * dx
+                    bottom = p12[c] * (1 - dx) + p22[c] * dx
+                    val = top * (1 - dy) + bottom * dy
+                    new_pixel.append(int(val))
+                result.append(tuple(new_pixel))
+            else:
+                top = p11 * (1 - dx) + p21 * dx
+                bottom = p12 * (1 - dx) + p22 * dx
+                val = top * (1 - dy) + bottom * dy
+                result.append(int(val))
+                
     return result, new_width, new_height
 
 def doMin(pixels, width, height, param):
@@ -251,102 +351,112 @@ def doAdaptive(pixels, width, height, param):
     return result
 
 def doMSE(pixels1, pixels2):
-    # Flatten pixels if they are RGB tuples
-    if isinstance(pixels1[0], tuple):
-        vals1 = [c for p in pixels1 for c in p] # Example: [(R1,G1,B1), (R2,G2,B2)] -> [R1,G1,B1,R2,G2,B2]
-        vals2 = [c for p in pixels2 for c in p]
-    else:
-        vals1 = pixels1
-        vals2 = pixels2
-        
-    if len(vals1) != len(vals2):
+    if len(pixels1) != len(pixels2):
         raise ValueError("Images must have the exact same dimensions for comparison.")
         
-    MN = len(vals1)
-    sse = sum((v1 - v2) ** 2 for v1, v2 in zip(vals1, vals2)) # Example: sum((R1-R2)^2 + (G1-G2)^2 + (B1-B2)^2 + ...)
+    MN = len(pixels1)
     
-    return sse / MN
+    if isinstance(pixels1[0], tuple):
+        # Calculate MSE for R, G, and B channels separately
+        mse_r = sum((p1[0] - p2[0]) ** 2 for p1, p2 in zip(pixels1, pixels2)) / MN
+        mse_g = sum((p1[1] - p2[1]) ** 2 for p1, p2 in zip(pixels1, pixels2)) / MN
+        mse_b = sum((p1[2] - p2[2]) ** 2 for p1, p2 in zip(pixels1, pixels2)) / MN
+        return (mse_r, mse_g, mse_b)
+    else:
+        # Grayscale
+        mse = sum((v1 - v2) ** 2 for v1, v2 in zip(pixels1, pixels2)) / MN
+        return mse
 
 def doPMSE(pixels1, pixels2):
-    if isinstance(pixels1[0], tuple):
-        vals1 = [c for p in pixels1 for c in p]
-        vals2 = [c for p in pixels2 for c in p]
-    else:
-        vals1 = pixels1
-        vals2 = pixels2
-        
-    if len(vals1) != len(vals2):
+    if len(pixels1) != len(pixels2):
         raise ValueError("Images must have the exact same dimensions for comparison.")
         
-    MN = len(vals1)
-    sse = sum((v1 - v2) ** 2 for v1, v2 in zip(vals1, vals2))
-    max_f = max(vals1)
+    MN = len(pixels1)
     
-    # Guard against division by zero if the image is completely black
-    if max_f == 0:
-        return float('inf')
+    if isinstance(pixels1[0], tuple):
+        sse_r = sum((p1[0] - p2[0]) ** 2 for p1, p2 in zip(pixels1, pixels2))
+        sse_g = sum((p1[1] - p2[1]) ** 2 for p1, p2 in zip(pixels1, pixels2))
+        sse_b = sum((p1[2] - p2[2]) ** 2 for p1, p2 in zip(pixels1, pixels2))
         
-    mse = sse / MN
-    pmse = mse / (max_f ** 2)
-    return pmse
+        max_r = max(p[0] for p in pixels1)
+        max_g = max(p[1] for p in pixels1)
+        max_b = max(p[2] for p in pixels1)
+        
+        pmse_r = (sse_r / MN) / (max_r ** 2) if max_r != 0 else float('inf')
+        pmse_g = (sse_g / MN) / (max_g ** 2) if max_g != 0 else float('inf')
+        pmse_b = (sse_b / MN) / (max_b ** 2) if max_b != 0 else float('inf')
+        
+        return (pmse_r, pmse_g, pmse_b)
+    else:
+        sse = sum((v1 - v2) ** 2 for v1, v2 in zip(pixels1, pixels2))
+        max_f = max(pixels1)
+        if max_f == 0:
+            return float('inf')
+        return (sse / MN) / (max_f ** 2)
 
 def doSNR(pixels1, pixels2):
-    if isinstance(pixels1[0], tuple):
-        vals1 = [c for p in pixels1 for c in p]
-        vals2 = [c for p in pixels2 for c in p]
-    else:
-        vals1 = pixels1
-        vals2 = pixels2
-        
-    if len(vals1) != len(vals2):
+    if len(pixels1) != len(pixels2):
         raise ValueError("Images must have the exact same dimensions for comparison.")
         
-    sse = sum((v1 - v2) ** 2 for v1, v2 in zip(vals1, vals2))
-    
-    # Guard against division by zero if both images are perfectly identical
-    if sse == 0:
-        return float('inf')
+    if isinstance(pixels1[0], tuple):
+        sse_r = sum((p1[0] - p2[0]) ** 2 for p1, p2 in zip(pixels1, pixels2))
+        sse_g = sum((p1[1] - p2[1]) ** 2 for p1, p2 in zip(pixels1, pixels2))
+        sse_b = sum((p1[2] - p2[2]) ** 2 for p1, p2 in zip(pixels1, pixels2))
         
-    sum_sq_f = sum(v ** 2 for v in vals1)
-    snr = 10 * math.log10(sum_sq_f / sse)
-    return snr
+        sum_sq_r = sum(p[0] ** 2 for p in pixels1)
+        sum_sq_g = sum(p[1] ** 2 for p in pixels1)
+        sum_sq_b = sum(p[2] ** 2 for p in pixels1)
+        
+        snr_r = 10 * math.log10(sum_sq_r / sse_r) if sse_r != 0 else float('inf')
+        snr_g = 10 * math.log10(sum_sq_g / sse_g) if sse_g != 0 else float('inf')
+        snr_b = 10 * math.log10(sum_sq_b / sse_b) if sse_b != 0 else float('inf')
+        
+        return (snr_r, snr_g, snr_b)
+    else:
+        sse = sum((v1 - v2) ** 2 for v1, v2 in zip(pixels1, pixels2))
+        if sse == 0:
+            return float('inf')
+        sum_sq = sum(v ** 2 for v in pixels1)
+        return 10 * math.log10(sum_sq / sse)
 
 def doPSNR(pixels1, pixels2):
-    if isinstance(pixels1[0], tuple):
-        vals1 = [c for p in pixels1 for c in p]
-        vals2 = [c for p in pixels2 for c in p]
-    else:
-        vals1 = pixels1
-        vals2 = pixels2
-        
-    if len(vals1) != len(vals2):
+    if len(pixels1) != len(pixels2):
         raise ValueError("Images must have the exact same dimensions for comparison.")
         
-    MN = len(vals1)
-    sse = sum((v1 - v2) ** 2 for v1, v2 in zip(vals1, vals2))
+    MN = len(pixels1)
     
-    # Guard against division by zero
-    if sse == 0:
-        return float('inf')
+    if isinstance(pixels1[0], tuple):
+        sse_r = sum((p1[0] - p2[0]) ** 2 for p1, p2 in zip(pixels1, pixels2))
+        sse_g = sum((p1[1] - p2[1]) ** 2 for p1, p2 in zip(pixels1, pixels2))
+        sse_b = sum((p1[2] - p2[2]) ** 2 for p1, p2 in zip(pixels1, pixels2))
         
-    max_f = max(vals1)
-    sum_max_sq = MN * (max_f ** 2)
-    psnr = 10 * math.log10(sum_max_sq / sse)
-    return psnr
+        max_r = max(p[0] for p in pixels1)
+        max_g = max(p[1] for p in pixels1)
+        max_b = max(p[2] for p in pixels1)
+        
+        psnr_r = 10 * math.log10((MN * (max_r ** 2)) / sse_r) if sse_r != 0 else float('inf')
+        psnr_g = 10 * math.log10((MN * (max_g ** 2)) / sse_g) if sse_g != 0 else float('inf')
+        psnr_b = 10 * math.log10((MN * (max_b ** 2)) / sse_b) if sse_b != 0 else float('inf')
+        
+        return (psnr_r, psnr_g, psnr_b)
+    else:
+        sse = sum((v1 - v2) ** 2 for v1, v2 in zip(pixels1, pixels2))
+        if sse == 0:
+            return float('inf')
+        max_f = max(pixels1)
+        return 10 * math.log10((MN * (max_f ** 2)) / sse)
 
 def doMD(pixels1, pixels2):
-    if isinstance(pixels1[0], tuple):
-        vals1 = [c for p in pixels1 for c in p]
-        vals2 = [c for p in pixels2 for c in p]
-    else:
-        vals1 = pixels1
-        vals2 = pixels2
-        
-    if len(vals1) != len(vals2):
+    if len(pixels1) != len(pixels2):
         raise ValueError("Images must have the exact same dimensions for comparison.")
         
-    md = max(abs(v1 - v2) for v1, v2 in zip(vals1, vals2))
-    return md
+    if isinstance(pixels1[0], tuple):
+        md_r = max(abs(p1[0] - p2[0]) for p1, p2 in zip(pixels1, pixels2))
+        md_g = max(abs(p1[1] - p2[1]) for p1, p2 in zip(pixels1, pixels2))
+        md_b = max(abs(p1[2] - p2[2]) for p1, p2 in zip(pixels1, pixels2))
+        return (md_r, md_g, md_b)
+    else:
+        return max(abs(v1 - v2) for v1, v2 in zip(pixels1, pixels2))
 
 
 def printHelp():
