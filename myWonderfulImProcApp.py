@@ -446,10 +446,11 @@ def doPSNR(pixels1, pixels2):
         max_f = max(pixels1)
         return 10 * math.log10((MN * (max_f ** 2)) / sse)
 
+
 def doMD(pixels1, pixels2):
     if len(pixels1) != len(pixels2):
         raise ValueError("Images must have the exact same dimensions for comparison.")
-        
+
     if isinstance(pixels1[0], tuple):
         md_r = max(abs(p1[0] - p2[0]) for p1, p2 in zip(pixels1, pixels2))
         md_g = max(abs(p1[1] - p2[1]) for p1, p2 in zip(pixels1, pixels2))
@@ -457,6 +458,343 @@ def doMD(pixels1, pixels2):
         return (md_r, md_g, md_b)
     else:
         return max(abs(v1 - v2) for v1, v2 in zip(pixels1, pixels2))
+
+
+def doHistogram(pixels):
+    hist_w = 256
+    hist_h = 200
+    is_rgb = isinstance(pixels[0], tuple)
+
+    if is_rgb:
+        # Initialise white background
+        result = [(255, 255, 255)] * (hist_w * hist_h)
+        hist_r, hist_g, hist_b = [0] * 256, [0] * 256, [0] * 256
+
+        for p in pixels:
+            hist_r[p[0]] += 1
+            hist_g[p[1]] += 1
+            hist_b[p[2]] += 1
+
+        max_val = max(max(hist_r), max(hist_g), max(hist_b))
+        if max_val == 0: max_val = 1
+
+        for x in range(256):
+            r_bar = int((hist_r[x] / max_val) * hist_h)
+            g_bar = int((hist_g[x] / max_val) * hist_h)
+            b_bar = int((hist_b[x] / max_val) * hist_h)
+
+            # Render RGB lines
+            for y in range(hist_h):
+                r_col = 255 if (hist_h - y) > r_bar else 0
+                g_col = 255 if (hist_h - y) > g_bar else 0
+                b_col = 255 if (hist_h - y) > b_bar else 0
+                result[y * hist_w + x] = (r_col, g_col, b_col)
+    else:
+        # Grayscale histogram
+        result = [255] * (hist_w * hist_h)
+        hist = [0] * 256
+
+        for p in pixels:
+            hist[p] += 1
+
+        max_val = max(hist)
+        if max_val == 0: max_val = 1
+
+        for x in range(256):
+            bar_h = int((hist[x] / max_val) * hist_h)
+            for y in range(hist_h - bar_h, hist_h):
+                result[y * hist_w + x] = 0
+
+    return result, hist_w, hist_h
+
+
+
+def doHexponent(pixels, param):
+
+    alpha = float(param)
+    if alpha == 0:
+        raise ValueError("Alpha cannot be zero.")
+
+    g_min = 0  # Defaulting minimum output brightness to 0
+    N = len(pixels)
+    is_rgb = isinstance(pixels[0], tuple)
+    result = []
+
+    def calculate_lut(hist):
+        # Calculate Cumulative Distribution Function (CDF)
+        cdf = [0] * 256
+        cdf[0] = hist[0]
+        for i in range(1, 256):
+            cdf[i] = cdf[i - 1] + hist[i]
+
+        lut = [0] * 256
+        for i in range(256):
+            cdf_val = cdf[i]
+            # Prevent math domain error for log(0) when CDF equals total pixels
+            if cdf_val == N:
+                cdf_val = N - 1
+            try:
+                # Apply the exponential equation
+                val = g_min - (1.0 / alpha) * math.log(1.0 - (cdf_val / float(N)))
+                lut[i] = max(0, min(255, int(val)))
+            except ValueError:
+                lut[i] = 255
+        return lut
+
+    if is_rgb:
+        # Separate channels for RGB
+        hist_r, hist_g, hist_b = [0] * 256, [0] * 256, [0] * 256
+        for p in pixels:
+            hist_r[p[0]] += 1
+            hist_g[p[1]] += 1
+            hist_b[p[2]] += 1
+
+        lut_r = calculate_lut(hist_r)
+        lut_g = calculate_lut(hist_g)
+        lut_b = calculate_lut(hist_b)
+
+        for p in pixels:
+            result.append((lut_r[p[0]], lut_g[p[1]], lut_b[p[2]]))
+    else:
+        # Grayscale
+        hist = [0] * 256
+        for p in pixels:
+            hist[p] += 1
+
+        lut = calculate_lut(hist)
+        for p in pixels:
+            result.append(lut[p])
+
+    return result
+
+
+# (C1) Mean
+def doCMean(pixels):
+    N = len(pixels)
+    is_rgb = isinstance(pixels[0], tuple)
+    if is_rgb:
+        hr, hg, hb = [0] * 256, [0] * 256, [0] * 256
+        for p in pixels:
+            hr[p[0]] += 1
+            hg[p[1]] += 1
+            hb[p[2]] += 1
+        mean_r = sum(m * hr[m] for m in range(256)) / N
+        mean_g = sum(m * hg[m] for m in range(256)) / N
+        mean_b = sum(m * hb[m] for m in range(256)) / N
+        return (mean_r, mean_g, mean_b)
+    else:
+        h = [0] * 256
+        for p in pixels:
+            h[p] += 1
+        mean = sum(m * h[m] for m in range(256)) / N
+        return mean
+
+
+# (C1) Variance
+def doCVariance(pixels):
+    N = len(pixels)
+    is_rgb = isinstance(pixels[0], tuple)
+    if is_rgb:
+        hr, hg, hb = [0] * 256, [0] * 256, [0] * 256
+        for p in pixels:
+            hr[p[0]] += 1
+            hg[p[1]] += 1
+            hb[p[2]] += 1
+        mean_r = sum(m * hr[m] for m in range(256)) / N
+        mean_g = sum(m * hg[m] for m in range(256)) / N
+        mean_b = sum(m * hb[m] for m in range(256)) / N
+        var_r = sum(((m - mean_r) ** 2) * hr[m] for m in range(256)) / N
+        var_g = sum(((m - mean_g) ** 2) * hg[m] for m in range(256)) / N
+        var_b = sum(((m - mean_b) ** 2) * hb[m] for m in range(256)) / N
+        return (var_r, var_g, var_b)
+    else:
+        h = [0] * 256
+        for p in pixels:
+            h[p] += 1
+        mean = sum(m * h[m] for m in range(256)) / N
+        var = sum(((m - mean) ** 2) * h[m] for m in range(256)) / N
+        return var
+
+
+# (C2) Standard Deviation
+def doCStdev(pixels):
+    N = len(pixels)
+    is_rgb = isinstance(pixels[0], tuple)
+    if is_rgb:
+        hr, hg, hb = [0] * 256, [0] * 256, [0] * 256
+        for p in pixels:
+            hr[p[0]] += 1
+            hg[p[1]] += 1
+            hb[p[2]] += 1
+        mean_r = sum(m * hr[m] for m in range(256)) / N
+        mean_g = sum(m * hg[m] for m in range(256)) / N
+        mean_b = sum(m * hb[m] for m in range(256)) / N
+        var_r = sum(((m - mean_r) ** 2) * hr[m] for m in range(256)) / N
+        var_g = sum(((m - mean_g) ** 2) * hg[m] for m in range(256)) / N
+        var_b = sum(((m - mean_b) ** 2) * hb[m] for m in range(256)) / N
+        return (math.sqrt(var_r), math.sqrt(var_g), math.sqrt(var_b))
+    else:
+        h = [0] * 256
+        for p in pixels:
+            h[p] += 1
+        mean = sum(m * h[m] for m in range(256)) / N
+        var = sum(((m - mean) ** 2) * h[m] for m in range(256)) / N
+        return math.sqrt(var)
+
+
+# (C2) Variation Coefficient I
+def doCVarCoI(pixels):
+    N = len(pixels)
+    is_rgb = isinstance(pixels[0], tuple)
+    if is_rgb:
+        hr, hg, hb = [0] * 256, [0] * 256, [0] * 256
+        for p in pixels:
+            hr[p[0]] += 1
+            hg[p[1]] += 1
+            hb[p[2]] += 1
+        mean_r = sum(m * hr[m] for m in range(256)) / N
+        mean_g = sum(m * hg[m] for m in range(256)) / N
+        mean_b = sum(m * hb[m] for m in range(256)) / N
+        var_r = sum(((m - mean_r) ** 2) * hr[m] for m in range(256)) / N
+        var_g = sum(((m - mean_g) ** 2) * hg[m] for m in range(256)) / N
+        var_b = sum(((m - mean_b) ** 2) * hb[m] for m in range(256)) / N
+        vc_r = math.sqrt(var_r) / mean_r if mean_r != 0 else float('inf')
+        vc_g = math.sqrt(var_g) / mean_g if mean_g != 0 else float('inf')
+        vc_b = math.sqrt(var_b) / mean_b if mean_b != 0 else float('inf')
+        return (vc_r, vc_g, vc_b)
+    else:
+        h = [0] * 256
+        for p in pixels:
+            h[p] += 1
+        mean = sum(m * h[m] for m in range(256)) / N
+        var = sum(((m - mean) ** 2) * h[m] for m in range(256)) / N
+        return math.sqrt(var) / mean if mean != 0 else float('inf')
+
+
+# (C3) Asymmetry Coefficient
+def doCAsyCo(pixels):
+    N = len(pixels)
+    is_rgb = isinstance(pixels[0], tuple)
+    if is_rgb:
+        hr, hg, hb = [0] * 256, [0] * 256, [0] * 256
+        for p in pixels:
+            hr[p[0]] += 1
+            hg[p[1]] += 1
+            hb[p[2]] += 1
+        mean_r = sum(m * hr[m] for m in range(256)) / N
+        mean_g = sum(m * hg[m] for m in range(256)) / N
+        mean_b = sum(m * hb[m] for m in range(256)) / N
+        var_r = sum(((m - mean_r) ** 2) * hr[m] for m in range(256)) / N
+        var_g = sum(((m - mean_g) ** 2) * hg[m] for m in range(256)) / N
+        var_b = sum(((m - mean_b) ** 2) * hb[m] for m in range(256)) / N
+        std_r, std_g, std_b = math.sqrt(var_r), math.sqrt(var_g), math.sqrt(var_b)
+
+        asy_r = (1 / (std_r ** 3)) * (
+                    sum(((m - mean_r) ** 3) * hr[m] for m in range(256)) / N) if std_r != 0 else float('inf')
+        asy_g = (1 / (std_g ** 3)) * (
+                    sum(((m - mean_g) ** 3) * hg[m] for m in range(256)) / N) if std_g != 0 else float('inf')
+        asy_b = (1 / (std_b ** 3)) * (
+                    sum(((m - mean_b) ** 3) * hb[m] for m in range(256)) / N) if std_b != 0 else float('inf')
+        return (asy_r, asy_g, asy_b)
+    else:
+        h = [0] * 256
+        for p in pixels:
+            h[p] += 1
+        mean = sum(m * h[m] for m in range(256)) / N
+        var = sum(((m - mean) ** 2) * h[m] for m in range(256)) / N
+        std = math.sqrt(var)
+        if std == 0: return float('inf')
+        return (1 / (std ** 3)) * (sum(((m - mean) ** 3) * h[m] for m in range(256)) / N)
+
+
+# (C4) Flattening Coefficient
+def doCFlaCo(pixels):
+    N = len(pixels)
+    is_rgb = isinstance(pixels[0], tuple)
+    if is_rgb:
+        hr, hg, hb = [0] * 256, [0] * 256, [0] * 256
+        for p in pixels:
+            hr[p[0]] += 1
+            hg[p[1]] += 1
+            hb[p[2]] += 1
+        mean_r = sum(m * hr[m] for m in range(256)) / N
+        mean_g = sum(m * hg[m] for m in range(256)) / N
+        mean_b = sum(m * hb[m] for m in range(256)) / N
+        var_r = sum(((m - mean_r) ** 2) * hr[m] for m in range(256)) / N
+        var_g = sum(((m - mean_g) ** 2) * hg[m] for m in range(256)) / N
+        var_b = sum(((m - mean_b) ** 2) * hb[m] for m in range(256)) / N
+        std_r, std_g, std_b = math.sqrt(var_r), math.sqrt(var_g), math.sqrt(var_b)
+
+        fla_r = (1 / (std_r ** 4)) * (
+                    sum(((m - mean_r) ** 4) * hr[m] for m in range(256)) / N) - 3 if std_r != 0 else float('inf')
+        fla_g = (1 / (std_g ** 4)) * (
+                    sum(((m - mean_g) ** 4) * hg[m] for m in range(256)) / N) - 3 if std_g != 0 else float('inf')
+        fla_b = (1 / (std_b ** 4)) * (
+                    sum(((m - mean_b) ** 4) * hb[m] for m in range(256)) / N) - 3 if std_b != 0 else float('inf')
+        return (fla_r, fla_g, fla_b)
+    else:
+        h = [0] * 256
+        for p in pixels:
+            h[p] += 1
+        mean = sum(m * h[m] for m in range(256)) / N
+        var = sum(((m - mean) ** 2) * h[m] for m in range(256)) / N
+        std = math.sqrt(var)
+        if std == 0: return float('inf')
+        return (1 / (std ** 4)) * (sum(((m - mean) ** 4) * h[m] for m in range(256)) / N) - 3
+
+
+# (C5) Variation Coefficient II
+def doCVarCoII(pixels):
+    N = len(pixels)
+    is_rgb = isinstance(pixels[0], tuple)
+    if is_rgb:
+        hr, hg, hb = [0] * 256, [0] * 256, [0] * 256
+        for p in pixels:
+            hr[p[0]] += 1
+            hg[p[1]] += 1
+            hb[p[2]] += 1
+        vc2_r = (1 / (N ** 2)) * sum(h ** 2 for h in hr)
+        vc2_g = (1 / (N ** 2)) * sum(h ** 2 for h in hg)
+        vc2_b = (1 / (N ** 2)) * sum(h ** 2 for h in hb)
+        return (vc2_r, vc2_g, vc2_b)
+    else:
+        h = [0] * 256
+        for p in pixels:
+            h[p] += 1
+        return (1 / (N ** 2)) * sum(val ** 2 for val in h)
+
+
+# (C6) Information Source Entropy
+def doCEntropy(pixels):
+    N = len(pixels)
+    is_rgb = isinstance(pixels[0], tuple)
+    if is_rgb:
+        hr, hg, hb = [0] * 256, [0] * 256, [0] * 256
+        for p in pixels:
+            hr[p[0]] += 1
+            hg[p[1]] += 1
+            hb[p[2]] += 1
+
+        ent_r, ent_g, ent_b = 0, 0, 0
+        for val in hr:
+            if val > 0: ent_r -= (val / N) * math.log2(val / N)
+        for val in hg:
+            if val > 0: ent_g -= (val / N) * math.log2(val / N)
+        for val in hb:
+            if val > 0: ent_b -= (val / N) * math.log2(val / N)
+        return (ent_r, ent_g, ent_b)
+    else:
+        h = [0] * 256
+        for p in pixels:
+            h[p] += 1
+        entropy = 0
+        for val in h:
+            if val > 0:
+                p = val / N
+                entropy -= p * math.log2(p)
+        return entropy
+
+
 
 # UNIVERSAL CONVOLUTION (Theoretical implementation)
 # Required by the assignment guidelines to prove the understanding of the generic algorithm.
@@ -594,8 +932,19 @@ Usage:
     python myWonderfulImProcApp.py --snr images_input\original.bmp images_input\compared.bmp
     python myWonderfulImProcApp.py --psnr images_input\original.bmp images_input\compared.bmp
     python myWonderfulImProcApp.py --md images_input\original.bmp images_input\compared.bmp
+    python myWonderfulImProcApp.py --histogram images_input\input.bmp images_output\output.bmp
+    python myWonderfulImProcApp.py --hexponent VALUE images_input\input.bmp images_output\output.bmp
+    python myWonderfulImProcApp.py --cmean images_input\input.bmp
+    python myWonderfulImProcApp.py --cvariance images_input\input.bmp
+    python myWonderfulImProcApp.py --cstdev images_input\input.bmp
+    python myWonderfulImProcApp.py --cvarcoi images_input\input.bmp
+    python myWonderfulImProcApp.py --casyco images_input\input.bmp
+    python myWonderfulImProcApp.py --cflaco images_input\input.bmp
+    python myWonderfulImProcApp.py --cvarcoii images_input\input.bmp
+    python myWonderfulImProcApp.py --centropy images_input\input.bmp
     python myWonderfulImProcApp.py --slaplace images_input\input.bmp images_output\output.bmp
     python myWonderfulImProcApp.py --orobertsii images_input\input.bmp images_output\output.bmp
+
     
 Commands:
     --brightness VALUE  : Modify brightness by adding VALUE to each pixel channel.
@@ -614,6 +963,16 @@ Commands:
     --snr               : Signal to noise ratio [dB]
     --psnr              : Peak signal to noise ratio [dB]
     --md                : Maximum difference
+    --histogram         : Generate and save a 256x200 image of the histogram.
+    --hexponent VALUE   : Apply Exponential final probability density function.
+    --cmean             : Image characteristic: Mean
+    --cvariance         : Image characteristic: Variance
+    --cstdev            : Image characteristic: Standard deviation
+    --cvarcoi           : Image characteristic: Variation coefficient I
+    --casyco            : Image characteristic: Asymmetry coefficient
+    --cflaco            : Image characteristic: Flattening coefficient
+    --cvarcoii          : Image characteristic: Variation coefficient II
+    --centropy          : Image characteristic: Information source entropy
     --slaplace          : Extract details using Laplacian linear filter.
     --orobertsii        : Non-linear filtration using Roberts operator II.
     
@@ -639,9 +998,13 @@ def main():
     
     # Define groups of commands
     metric_commands = ("--mse", "--pmse", "--snr", "--psnr", "--md")
+    char_commands = (
+        "--cmean", "--cvariance", "--cstdev", "--cvarcoi",
+        "--casyco", "--cflaco", "--cvarcoii", "--centropy"
+    )
 
     # Operations requiring an additional parameter (Value, Factor, Window Size)
-    if command in ("--brightness", "--contrast", "--shrink", "--enlarge", "--min", "--max", "--adaptive"):
+    if command in ("--brightness", "--contrast", "--shrink", "--enlarge", "--min", "--max", "--adaptive", "--hexponent"):
         if len(sys.argv) != 5:
             print("Usage: command VALUE input.bmp output.bmp")
             return
@@ -650,7 +1013,7 @@ def main():
         output_file = sys.argv[4]
 
     # Operations that do not require an additional parameter
-    elif command in ("--negative", "--hflip", "--vflip", "--dflip", "--slaplace", "--orobertsii"):
+    elif command in ("--negative", "--hflip", "--vflip", "--dflip", "--slaplace", "--histogram", "--orobertsii"):
         if len(sys.argv) != 4:
             print(f"Usage: {command} input.bmp output.bmp")
             return
@@ -666,11 +1029,19 @@ def main():
         param = None
         input_file = sys.argv[2]
         output_file = sys.argv[3] # Represents the compared image here
-
+        # Nowy blok - operacje wymagające tylko jednego pliku (bez pliku wyjściowego)
+    elif command in char_commands:
+        if len(sys.argv) != 3:
+            print(f"Usage: {command} input.bmp")
+            return
+        param = None
+        input_file = sys.argv[2]
+        output_file = None
     else:
         print("Unknown command:", command)
         print("Use --help for available commands.")
         return
+
 
     try:
         # Open the first image
@@ -701,7 +1072,29 @@ def main():
                 
             print(f"[{command.upper()}] Result: {result}")
             return
+        if command in char_commands:
+            if command == "--cmean":
+                result = doCMean(pixels)
+            elif command == "--cvariance":
+                result = doCVariance(pixels)
+            elif command == "--cstdev":
+                result = doCStdev(pixels)
+            elif command == "--cvarcoi":
+                result = doCVarCoI(pixels)
+            elif command == "--casyco":
+                result = doCAsyCo(pixels)
+            elif command == "--cflaco":
+                result = doCFlaCo(pixels)
+            elif command == "--cvarcoii":
+                result = doCVarCoII(pixels)
+            elif command == "--centropy":
+                result = doCEntropy(pixels)
 
+            if isinstance(result, tuple):
+                print(f"[{command.upper()}] Result (R, G, B): ({result[0]:.4f}, {result[1]:.4f}, {result[2]:.4f})")
+            else:
+                print(f"[{command.upper()}] Result: {result:.4f}")
+            return
         # Process standard image transformations
         if command == "--brightness":
             pixels = doBrightness(pixels, param)
@@ -725,6 +1118,10 @@ def main():
             pixels = doMax(pixels, width, height, param)
         elif command == "--adaptive":
             pixels = doAdaptive(pixels, width, height, param)
+        elif command == "--hexponent":
+            pixels = doHexponent(pixels, param)
+        elif command == "--histogram":
+            pixels, width, height = doHistogram(pixels)
         elif command == "--slaplace":
             pixels = doLaplaceOptimized(pixels, width, height)
         elif command == "--orobertsii":
