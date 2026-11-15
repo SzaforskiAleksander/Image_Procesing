@@ -458,6 +458,120 @@ def doMD(pixels1, pixels2):
     else:
         return max(abs(v1 - v2) for v1, v2 in zip(pixels1, pixels2))
 
+# UNIVERSAL CONVOLUTION (Theoretical implementation)
+# Required by the assignment guidelines to prove the understanding of the generic algorithm.
+# This function works with ANY 3x3 mask by iterating over a 3x3 neighborhood for every pixel.
+def doConvolutionUniversal(pixels, width, height, mask):
+    result = []
+    is_rgb = isinstance(pixels[0], tuple)
+    
+    for y in range(height):
+        for x in range(width):
+            if is_rgb:
+                sum_r, sum_g, sum_b = 0, 0, 0
+                # Double loop to iterate through the 3x3 neighborhood
+                for dy in range(-1, 2):
+                    for dx in range(-1, 2):
+                        # Clamping (max/min) prevents index errors at the image borders
+                        cy = max(0, min(height - 1, y + dy))
+                        cx = max(0, min(width - 1, x + dx))
+                        weight = mask[dy+1][dx+1]
+                        
+                        p = pixels[cy * width + cx]
+                        # Multiply pixel intensity by the mask weight and accumulate
+                        sum_r += p[0] * weight
+                        sum_g += p[1] * weight
+                        sum_b += p[2] * weight
+                # Clip the final sum to ensure values stay within valid RGB range [0, 255]
+                result.append((max(0, min(255, int(sum_r))), max(0, min(255, int(sum_g))), max(0, min(255, int(sum_b)))))
+            else:
+                sum_v = 0
+                for dy in range(-1, 2):
+                    for dx in range(-1, 2):
+                        cy = max(0, min(height - 1, y + dy))
+                        cx = max(0, min(width - 1, x + dx))
+                        weight = mask[dy+1][dx+1]
+                        
+                        sum_v += pixels[cy * width + cx] * weight
+                result.append(max(0, min(255, int(sum_v))))
+    return result
+
+def doLaplaceOptimized(pixels, width, height):
+    result = []
+    is_rgb = isinstance(pixels[0], tuple)
+    
+    for y in range(height):
+        y_up = max(0, y - 1) * width
+        y_down = min(height - 1, y + 1) * width
+        y_cen = y * width
+        
+        for x in range(width):
+            x_left = max(0, x - 1)
+            x_right = min(width - 1, x + 1)
+            x_cen = x
+            
+            if is_rgb:
+                # Fetch the 5 necessary pixels (Center and its direct cross neighbors)
+                c = pixels[y_cen + x_cen]
+                u = pixels[y_up + x_cen]
+                d = pixels[y_down + x_cen]
+                l = pixels[y_cen + x_left]
+                r = pixels[y_cen + x_right]
+                
+                # Apply the specific S5 formula directly
+                r_val = 4 * c[0] - u[0] - d[0] - l[0] - r[0]
+                g_val = 4 * c[1] - u[1] - d[1] - l[1] - r[1]
+                b_val = 4 * c[2] - u[2] - d[2] - l[2] - r[2]
+                
+                # Clip the result
+                result.append((max(0, min(255, r_val)), max(0, min(255, g_val)), max(0, min(255, b_val))))
+            else:
+                c = pixels[y_cen + x_cen]
+                u = pixels[y_up + x_cen]
+                d = pixels[y_down + x_cen]
+                l = pixels[y_cen + x_left]
+                r = pixels[y_cen + x_right]
+                
+                v = 4 * c - u - d - l - r
+                result.append(max(0, min(255, v)))
+                
+    return result
+
+def doRobertsII(pixels, width, height):
+    result = []
+    is_rgb = isinstance(pixels[0], tuple)
+    
+    for y in range(height):
+        for x in range(width):
+            # Clamping to avoid index out of bounds when looking at the right and bottom edges
+            x_curr = x
+            y_curr = y
+            x_next = min(width - 1, x + 1)
+            y_next = min(height - 1, y + 1)
+            
+            if is_rgb:
+                # Fetch the 4 pixels forming the 2x2 block
+                p00 = pixels[y_curr * width + x_curr] # Top-Left: x(n,m)
+                p11 = pixels[y_next * width + x_next] # Bottom-Right: x(n+1,m+1)
+                p10 = pixels[y_curr * width + x_next] # Top-Right: x(n+1,m)
+                p01 = pixels[y_next * width + x_curr] # Bottom-Left: x(n,m+1)
+                
+                # Calculate the absolute difference of the diagonals
+                r_val = abs(p00[0] - p11[0]) + abs(p10[0] - p01[0])
+                g_val = abs(p00[1] - p11[1]) + abs(p10[1] - p01[1])
+                b_val = abs(p00[2] - p11[2]) + abs(p10[2] - p01[2])
+                
+                result.append((max(0, min(255, r_val)), max(0, min(255, g_val)), max(0, min(255, b_val))))
+            else:
+                p00 = pixels[y_curr * width + x_curr]
+                p11 = pixels[y_next * width + x_next]
+                p10 = pixels[y_curr * width + x_next]
+                p01 = pixels[y_next * width + x_curr]
+                
+                v = abs(p00 - p11) + abs(p10 - p01)
+                result.append(max(0, min(255, v)))
+                
+    return result
 
 def printHelp():
     print("""
@@ -480,6 +594,8 @@ Usage:
     python myWonderfulImProcApp.py --snr images_input\original.bmp images_input\compared.bmp
     python myWonderfulImProcApp.py --psnr images_input\original.bmp images_input\compared.bmp
     python myWonderfulImProcApp.py --md images_input\original.bmp images_input\compared.bmp
+    python myWonderfulImProcApp.py --slaplace images_input\input.bmp images_output\output.bmp
+    python myWonderfulImProcApp.py --orobertsii images_input\input.bmp images_output\output.bmp
     
 Commands:
     --brightness VALUE  : Modify brightness by adding VALUE to each pixel channel.
@@ -498,6 +614,8 @@ Commands:
     --snr               : Signal to noise ratio [dB]
     --psnr              : Peak signal to noise ratio [dB]
     --md                : Maximum difference
+    --slaplace          : Extract details using Laplacian linear filter.
+    --orobertsii        : Non-linear filtration using Roberts operator II.
     
     --help              : Display this help message.
 """)
@@ -532,7 +650,7 @@ def main():
         output_file = sys.argv[4]
 
     # Operations that do not require an additional parameter
-    elif command in ("--negative", "--hflip", "--vflip", "--dflip"):
+    elif command in ("--negative", "--hflip", "--vflip", "--dflip", "--slaplace", "--orobertsii"):
         if len(sys.argv) != 4:
             print(f"Usage: {command} input.bmp output.bmp")
             return
@@ -607,6 +725,10 @@ def main():
             pixels = doMax(pixels, width, height, param)
         elif command == "--adaptive":
             pixels = doAdaptive(pixels, width, height, param)
+        elif command == "--slaplace":
+            pixels = doLaplaceOptimized(pixels, width, height)
+        elif command == "--orobertsii":
+            pixels = doRobertsII(pixels, width, height)
 
         # Create new image and save
         result_img = Image.new(mode, (width, height))
